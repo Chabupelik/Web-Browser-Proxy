@@ -26,6 +26,8 @@ services:
       - "127.0.0.1:9000:8080"
     env_file:
       - .env
+    volumes:
+      - ./releases:/app/releases
     depends_on:
       - db
       - redis

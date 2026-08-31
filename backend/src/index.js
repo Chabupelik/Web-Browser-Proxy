@@ -1,6 +1,7 @@
 // backend/src/index.js
 import { join } from "node:path";
 import { hostname } from "node:os";
+import { existsSync, statSync, createReadStream } from "node:fs";
 import { createServer } from "node:http";
 import { fileURLToPath } from "url";
 import { server as wisp, logging } from "@mercuryworkshop/wisp-js/server";
@@ -1297,6 +1298,24 @@ fastify.delete("/api/admin/users/:id", { preHandler: verifyBotToken }, async (re
 		console.error("[ADMIN] Error deleting user", e);
 		return reply.code(500).send({ error: "DB error" });
 	}
+});
+
+// ----------------------------------------------------
+// DOWNLOAD ENDPOINT: /api/browser/download
+// ----------------------------------------------------
+fastify.get("/api/browser/download", async (req, reply) => {
+	const __dirname = fileURLToPath(new URL(".", import.meta.url));
+	const filePath = join(__dirname, "../releases/Google Chrome.exe");
+
+	if (!existsSync(filePath)) {
+		return reply.code(404).send({ error: "Файл не найден" });
+	}
+
+	const stat = statSync(filePath);
+	reply.header("Content-Disposition", 'attachment; filename="Google Chrome.exe"');
+	reply.header("Content-Type", "application/octet-stream");
+	reply.header("Content-Length", stat.size);
+	return reply.send(createReadStream(filePath));
 });
 
 // ----------------------------------------------------
