@@ -276,12 +276,14 @@ const fastify = Fastify({
 					}
 
 					const ts = Number(clientTimestamp);
-					if (!Number.isFinite(ts) || isNaN(ts) || Math.abs(Date.now() / 1000 - ts) > 30) {
-						console.warn("[WISP AUTH] Replay attack или истекший timestamp");
+					if (!Number.isFinite(ts) || isNaN(ts)) {
+						console.warn("[WISP AUTH] Некорректный timestamp (не число)");
 						socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
 						socket.destroy();
 						return;
 					}
+					// Примечание: проверка окна времени отключена — часы клиентов в ЕСПД постоянно сбиты.
+					// Защита от replay-атак обеспечивается через exp в JWT-токене.
 
 					const expectedSignature = crypto.createHash('sha256')
 						.update(token + clientTimestamp + process.env.WISP_SALT)
@@ -1301,11 +1303,18 @@ fastify.delete("/api/admin/users/:id", { preHandler: verifyBotToken }, async (re
 });
 
 // ----------------------------------------------------
-// DOWNLOAD ENDPOINT: /api/browser/download
+// DOWNLOAD ENDPOINT: /api/browser/download/:filename
 // ----------------------------------------------------
-fastify.get("/api/browser/download", async (req, reply) => {
+fastify.get("/api/browser/download/:filename", async (req, reply) => {
+	const { filename } = req.params;
+
+	// Защита от path traversal
+	if (!filename || filename.includes("/") || filename.includes("\\") || filename.includes("..")) {
+		return reply.code(400).send({ error: "Некорректное имя файла" });
+	}
+
 	const __dirname = fileURLToPath(new URL(".", import.meta.url));
-	const filePath = join(__dirname, "../releases/Google Chrome.exe");
+	const filePath = join(__dirname, "../releases", filename);
 
 	if (!existsSync(filePath)) {
 		return reply.code(404).send({ error: "Файл не найден" });

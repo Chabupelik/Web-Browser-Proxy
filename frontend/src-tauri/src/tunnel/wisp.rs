@@ -44,42 +44,83 @@ impl WispClient {
     }
 
     pub async fn connect(wisp_url: &str) -> Result<Self, String> {
-        let parsed_url = Url::parse(wisp_url).map_err(|e| format!("Некорректный WISP URL: {}", e))?;
-        let host = parsed_url.host_str().ok_or("Отсутствует хост в WISP URL")?.to_string();
+        log::info!("[WISP] connect() вызван с URL: {}", wisp_url);
+
+        let parsed_url = Url::parse(wisp_url).map_err(|e| {
+            log::error!("[WISP] Некорректный URL '{}': {}", wisp_url, e);
+            format!("Некорректный WISP URL: {}", e)
+        })?;
+        let host = parsed_url.host_str().ok_or_else(|| {
+            log::error!("[WISP] Отсутствует хост в URL: {}", wisp_url);
+            "Отсутствует хост в WISP URL".to_string()
+        })?.to_string();
         let port = parsed_url.port_or_known_default().unwrap_or(443);
+        log::info!("[WISP] Целевой хост: {}:{}", host, port);
 
         // Проверяем наличие апстрим-прокси
         let upstream_proxy = option_env!("VITE_UPSTREAM_PROXY").unwrap_or("").to_string();
+        log::info!("[WISP] VITE_UPSTREAM_PROXY = '{}'", if upstream_proxy.is_empty() { "<пусто — прямое соединение>" } else { &upstream_proxy });
+
         let tcp_stream = if !upstream_proxy.is_empty() {
-            let proxy_url = Url::parse(&upstream_proxy).map_err(|e| format!("Некорректный VITE_UPSTREAM_PROXY: {}", e))?;
-            let proxy_host = proxy_url.host_str().ok_or("Отсутствует хост в прокси")?;
+            let proxy_url = Url::parse(&upstream_proxy).map_err(|e| {
+                log::error!("[WISP] Некорректный VITE_UPSTREAM_PROXY '{}': {}", upstream_proxy, e);
+                format!("Некорректный VITE_UPSTREAM_PROXY: {}", e)
+            })?;
+            let proxy_host = proxy_url.host_str().ok_or_else(|| {
+                log::error!("[WISP] Отсутствует хост в прокси URL: {}", upstream_proxy);
+                "Отсутствует хост в прокси".to_string()
+            })?;
             let proxy_port = proxy_url.port_or_known_default().unwrap_or(3128);
-            
+
+            log::info!("[WISP] Подключаемся к прокси {}:{}...", proxy_host, proxy_port);
             let mut stream = TcpStream::connect((proxy_host, proxy_port)).await
-                .map_err(|e| format!("Не удалось подключиться к прокси {}:{}: {}", proxy_host, proxy_port, e))?;
-                
+                .map_err(|e| {
+                    log::error!("[WISP] TCP-соединение с прокси {}:{} ПРОВАЛИЛОСЬ: {}", proxy_host, proxy_port, e);
+                    format!("Не удалось подключиться к прокси {}:{}: {}", proxy_host, proxy_port, e)
+                })?;
+            log::info!("[WISP] TCP к прокси {}:{} — ОК", proxy_host, proxy_port);
+
             let connect_req = format!("CONNECT {}:{} HTTP/1.1\r\nHost: {}:{}\r\n\r\n", host, port, host, port);
-            stream.write_all(connect_req.as_bytes()).await.map_err(|e| format!("Ошибка отправки CONNECT: {}", e))?;
-            
+            log::info!("[WISP] Отправляем CONNECT {}:{} через прокси...", host, port);
+            stream.write_all(connect_req.as_bytes()).await.map_err(|e| {
+                log::error!("[WISP] Ошибка отправки CONNECT-запроса: {}", e);
+                format!("Ошибка отправки CONNECT: {}", e)
+            })?;
+
             let mut buf = [0u8; 4096];
             let mut read_len = 0;
             loop {
-                let n = stream.read(&mut buf[read_len..]).await.map_err(|e| format!("Ошибка чтения ответа прокси: {}", e))?;
-                if n == 0 { return Err("Прокси закрыл соединение до ответа".to_string()); }
+                let n = stream.read(&mut buf[read_len..]).await.map_err(|e| {
+                    log::error!("[WISP] Ошибка чтения ответа прокси: {}", e);
+                    format!("Ошибка чтения ответа прокси: {}", e)
+                })?;
+                if n == 0 {
+                    log::error!("[WISP] Прокси закрыл соединение до ответа (прочитано {} байт)", read_len);
+                    return Err("Прокси закрыл соединение до ответа".to_string());
+                }
                 read_len += n;
                 if buf[..read_len].windows(4).any(|w| w == b"\r\n\r\n") {
                     break;
                 }
             }
             let response = String::from_utf8_lossy(&buf[..read_len]);
+            log::info!("[WISP] Ответ прокси на CONNECT: {}", response.lines().next().unwrap_or("<пустой>"));
             if !response.starts_with("HTTP/1.1 200") && !response.starts_with("HTTP/1.0 200") {
+                log::error!("[WISP] Прокси отказал в CONNECT: {}", response);
                 return Err(format!("Прокси вернул ошибку: {}", response));
             }
+            log::info!("[WISP] CONNECT через прокси — ОК, переходим к TLS");
             stream
         } else {
-            TcpStream::connect((host.as_str(), port))
+            log::info!("[WISP] Прямое TCP-подключение к {}:{}...", host, port);
+            let stream = TcpStream::connect((host.as_str(), port))
                 .await
-                .map_err(|e| format!("Не удалось подключиться к WISP хосту напрямую {}:{}: {}", host, port, e))?
+                .map_err(|e| {
+                    log::error!("[WISP] Прямое TCP к {}:{} ПРОВАЛИЛОСЬ: {}", host, port, e);
+                    format!("Не удалось подключиться к WISP хосту напрямую {}:{}: {}", host, port, e)
+                })?;
+            log::info!("[WISP] Прямое TCP к {}:{} — ОК", host, port);
+            stream
         };
 
         let token = parsed_url.path().trim_start_matches("/v1/live/");
@@ -104,19 +145,28 @@ impl WispClient {
             .map_err(|e| format!("Ошибка формирования WebSocket запроса: {}", e))?;
 
         // Создаем TLS коннектор, который игнорирует ошибки сертификатов (нужно для обхода SSL-Bumping прокси ЕСПД)
+        log::info!("[WISP] Создаём TLS коннектор (accept_invalid_certs=true для ЕСПД SSL-bump)...");
         let mut builder = native_tls::TlsConnector::builder();
         builder.danger_accept_invalid_certs(true);
         builder.danger_accept_invalid_hostnames(true);
-        let connector = builder.build().map_err(|e| format!("Ошибка создания TLS коннектора: {}", e))?;
+        let connector = builder.build().map_err(|e| {
+            log::error!("[WISP] Ошибка создания TLS коннектора: {}", e);
+            format!("Ошибка создания TLS коннектора: {}", e)
+        })?;
 
-        let (ws_stream, _) = tokio_tungstenite::client_async_tls_with_config(
+        log::info!("[WISP] Выполняем WebSocket handshake с {}...", wisp_url);
+        let (ws_stream, ws_response) = tokio_tungstenite::client_async_tls_with_config(
             request, 
             tcp_stream, 
             None,
             Some(tokio_tungstenite::Connector::NativeTls(connector))
         )
         .await
-        .map_err(|e| format!("Не удалось выполнить WebSocket handshake: {}", e))?;
+        .map_err(|e| {
+            log::error!("[WISP] WebSocket handshake ПРОВАЛИЛСЯ: {}", e);
+            format!("Не удалось выполнить WebSocket handshake: {}", e)
+        })?;
+        log::info!("[WISP] WebSocket handshake — ОК! HTTP статус: {}", ws_response.status());
 
         let (mut ws_sink, mut ws_source) = ws_stream.split();
         let (tx, mut rx) = mpsc::channel::<Message>(1000);
@@ -134,8 +184,11 @@ impl WispClient {
         let alive_rx = alive.clone();
 
         let cipher_tx = Aes256Gcm::new(&aes_key);
+        // Клонируем URL в owned String для захвата в spawn (требует 'static)
+        let wisp_url_owned = wisp_url.to_string();
         // Sender task: пересылает сообщения из канала в WebSocket
         tokio::spawn(async move {
+            let wisp_url = wisp_url_owned;
             while let Some(msg) = rx.recv().await {
                 let msg = match msg {
                     Message::Binary(data) => {
@@ -163,7 +216,7 @@ impl WispClient {
                 }
             }
             alive_tx.store(false, Ordering::SeqCst);
-            log::warn!("[WISP] WebSocket sender task завершилась — соединение разорвано");
+            log::warn!("[WISP] WebSocket sender task завершилась — соединение разорвано. URL был: {}", wisp_url);
         });
 
         let cipher_rx = Aes256Gcm::new(&aes_key);
