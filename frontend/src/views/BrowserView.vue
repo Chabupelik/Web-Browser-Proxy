@@ -511,6 +511,15 @@ onMounted(async () => {
     const { tabId, url, filename } = event.payload || {};
     handleNewDownload({ url, filename: filename || 'file' });
   });
+
+  // Открытие новой вкладки по запросу из WebView (window.open / target=_blank)
+  listen('open-new-tab', (event) => {
+    const { url } = event.payload || {};
+    if (!url) return;
+    browserStore.addTab(url);
+    const newTabId = browserStore.activeTabId;
+    processNavigation(newTabId, url);
+  });
 });
 
 onUnmounted(() => {

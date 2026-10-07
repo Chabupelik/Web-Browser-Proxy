@@ -123,8 +123,9 @@ impl TabManager {
 
                 // Перехват кликов по ссылкам с target=_blank
                 document.addEventListener('click', (e) => {
-                    const a = e.target.closest('a[target="_blank"]');
-                    if (a && a.href) {
+                    // Исключаем ссылки с атрибутом download — они идут в нативный on_download WebView2
+                    const a = e.target.closest('a[target="_blank"]:not([download])');
+                    if (a && a.href && !a.href.startsWith('blob:') && !a.href.startsWith('javascript:')) {
                         e.preventDefault();
                         e.stopPropagation();
                         try {
