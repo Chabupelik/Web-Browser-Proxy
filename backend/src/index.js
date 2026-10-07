@@ -282,8 +282,13 @@ const fastify = Fastify({
 						socket.destroy();
 						return;
 					}
-					// Примечание: проверка окна времени отключена — часы клиентов в ЕСПД постоянно сбиты.
-					// Защита от replay-атак обеспечивается через exp в JWT-токене.
+					// Окно 3600 секунд (1 час) — компенсирует сбитые часы на клиентах ЕСПД
+					if (Math.abs(Date.now() / 1000 - ts) > 3600) {
+						console.warn("[WISP AUTH] Replay attack или истекший timestamp (разница > 3600с)");
+						socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
+						socket.destroy();
+						return;
+					}
 
 					const expectedSignature = crypto.createHash('sha256')
 						.update(token + clientTimestamp + process.env.WISP_SALT)

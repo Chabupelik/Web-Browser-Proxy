@@ -473,3 +473,14 @@ pub fn native_get_downloads_dir() -> String {
     }
     ".".to_string()
 }
+
+/// Открывает URL в новой вкладке браузера (вызывается из JS при window.open / target=_blank)
+#[tauri::command]
+pub fn native_open_new_tab(app: tauri::AppHandle, url: String) {
+    #[derive(serde::Serialize, Clone)]
+    struct NewTabPayload {
+        url: String,
+    }
+    use tauri::Emitter;
+    let _ = app.emit("open-new-tab", NewTabPayload { url });
+}

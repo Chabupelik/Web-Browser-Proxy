@@ -104,6 +104,39 @@ impl TabManager {
                   });
                 }
 
+                // Перехват window.open() — открываем в новой вкладке браузера вместо нового окна
+                const _origOpen = window.open;
+                window.open = function(url, target, features) {
+                    if (url && url !== 'about:blank' && url !== '' && target !== '_self') {
+                        const absUrl = new URL(url, window.location.href).href;
+                        try {
+                            if (window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke) {
+                                window.__TAURI__.core.invoke('native_open_new_tab', { url: absUrl }).catch(() => {});
+                            } else if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {
+                                window.__TAURI_INTERNALS__.invoke('native_open_new_tab', { url: absUrl }).catch(() => {});
+                            }
+                        } catch (_) {}
+                        return null;
+                    }
+                    return _origOpen.call(this, url, target, features);
+                };
+
+                // Перехват кликов по ссылкам с target=_blank
+                document.addEventListener('click', (e) => {
+                    const a = e.target.closest('a[target="_blank"]');
+                    if (a && a.href) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        try {
+                            if (window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke) {
+                                window.__TAURI__.core.invoke('native_open_new_tab', { url: a.href }).catch(() => {});
+                            } else if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {
+                                window.__TAURI_INTERNALS__.invoke('native_open_new_tab', { url: a.href }).catch(() => {});
+                            }
+                        } catch (_) {}
+                    }
+                }, true);
+
                 window.addEventListener('contextmenu', (e) => {
                     e.preventDefault();
                     let href = '';
@@ -258,6 +291,11 @@ impl TabManager {
         let builder = WebviewBuilder::new(&label, parsed_url)
             .incognito(true)
             .initialization_script(&init_script)
+            .on_navigation(move |url| {
+                // Разрешаем все навигации (window.open перехватывается через JS)
+                let _ = url;
+                true
+            })
             .on_page_load(move |webview, _payload| {
                 // Автоматическая перезагрузка при первом открытии вкладки в сессии (решает проблему белого экрана ChatGPT/YouTube)
                 let _ = webview.eval(r#"
@@ -298,12 +336,27 @@ impl TabManager {
             .on_download(move |webview, event| {
                 match event {
                     tauri::webview::DownloadEvent::Requested { url, destination } => {
-                        println!("[DOWNLOAD] Requested: {:?} -> {:?}", url, destination);
+                        println!("[DOWNLOAD] Requested: {:?}", url);
+
+                        // Определяем имя файла из URL
                         let file_name = url.path_segments()
-                            .and_then(|s| s.last())
+                            .and_then(|mut s| s.next_back())
+                            .filter(|s| !s.is_empty())
                             .unwrap_or("download")
                             .to_string();
-                        
+                        // Убираем query-параметры из имени файла
+                        let file_name = file_name.split('?').next().unwrap_or(&file_name).to_string();
+
+                        // Устанавливаем путь в папку Downloads пользователя
+                        let dl_dir = if let Ok(profile) = std::env::var("USERPROFILE") {
+                            std::path::PathBuf::from(profile).join("Downloads")
+                        } else {
+                            std::env::temp_dir()
+                        };
+                        *destination = dl_dir.join(&file_name);
+
+                        println!("[DOWNLOAD] Saving to: {:?}", destination);
+
                         #[derive(serde::Serialize, Clone)]
                         #[allow(non_snake_case)]
                         struct DlPayload {
@@ -316,6 +369,21 @@ impl TabManager {
                             tabId: String::new(),
                             url: url.to_string(),
                             filename: file_name,
+                        });
+                        true
+                    }
+                    tauri::webview::DownloadEvent::Finished { url: _, path, success } => {
+                        println!("[DOWNLOAD] Finished: success={}, path={:?}", success, path);
+                        #[derive(serde::Serialize, Clone)]
+                        #[allow(non_snake_case)]
+                        struct DlFinishedPayload {
+                            success: bool,
+                            path: String,
+                        }
+                        use tauri::Emitter;
+                        let _ = webview.emit("webview-download-finished", DlFinishedPayload {
+                            success,
+                            path: path.map(|p| p.to_string_lossy().to_string()).unwrap_or_default(),
                         });
                         true
                     }
