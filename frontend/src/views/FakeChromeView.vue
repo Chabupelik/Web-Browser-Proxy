@@ -625,6 +625,15 @@ onMounted(async () => {
     const currentTab = tabs.value.find(t => t.id === activeTabId.value);
     if (currentTab) currentTab.isLoading = false;
   }));
+
+  unlistenListeners.push(await listen('open-new-tab', (event) => {
+    const { url } = event.payload || {};
+    if (!url) return;
+    const newId = `fake_tab_${Date.now()}`;
+    const newTab = { id: newId, title: 'Загрузка...', url: url, isLoading: true, isNewTab: false, favicon: '', _animating: true };
+    activeTabId.value = newId;
+    tabs.value.push(newTab);
+  }));
 });
 
 onUnmounted(() => {

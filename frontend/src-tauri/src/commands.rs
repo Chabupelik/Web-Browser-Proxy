@@ -2,7 +2,7 @@
 use crate::browser::TabManager;
 use crate::security::device::get_hardware_fingerprint;
 use crate::tunnel::{ProxyConnectionInfo, TunnelManager};
-use tauri::{Manager, State};
+use tauri::{Emitter, Manager, State};
 
 /// Возвращает уникальный аппаратный отпечаток устройства
 #[tauri::command]
@@ -255,6 +255,68 @@ pub fn native_maximize_window(app: tauri::AppHandle) {
                 let _ = win.maximize();
             }
         }
+    }
+}
+
+#[tauri::command]
+pub fn native_toggle_fullscreen(app: tauri::AppHandle) -> Result<bool, String> {
+    if let Some(win) = app.get_window("main").or_else(|| app.windows().into_values().next().map(|w| w.clone())) {
+        let is_fs = win.is_fullscreen().map_err(|e| e.to_string())?;
+        let next_state = !is_fs;
+        win.set_fullscreen(next_state).map_err(|e| e.to_string())?;
+        let _ = win.emit("fullscreen-changed", next_state);
+        Ok(next_state)
+    } else {
+        Err("Main window not found".to_string())
+    }
+}
+
+#[tauri::command]
+pub fn native_set_fullscreen(app: tauri::AppHandle, fullscreen: bool) -> Result<bool, String> {
+    if let Some(win) = app.get_window("main").or_else(|| app.windows().into_values().next().map(|w| w.clone())) {
+        let is_fs = win.is_fullscreen().map_err(|e| e.to_string())?;
+        if is_fs != fullscreen {
+            win.set_fullscreen(fullscreen).map_err(|e| e.to_string())?;
+            let _ = win.emit("fullscreen-changed", fullscreen);
+        }
+        Ok(fullscreen)
+    } else {
+        Err("Main window not found".to_string())
+    }
+}
+
+#[tauri::command]
+pub fn native_is_fullscreen(app: tauri::AppHandle) -> Result<bool, String> {
+    if let Some(win) = app.get_window("main").or_else(|| app.windows().into_values().next().map(|w| w.clone())) {
+        win.is_fullscreen().map_err(|e| e.to_string())
+    } else {
+        Err("Main window not found".to_string())
+    }
+}
+
+#[tauri::command]
+pub fn native_show_fullscreen_header(app: tauri::AppHandle, show: bool) -> Result<(), String> {
+    if let Some(win) = app.get_window("main").or_else(|| app.windows().into_values().next().map(|w| w.clone())) {
+        if let Ok(true) = win.is_fullscreen() {
+            let _ = win.emit("show-fullscreen-header", show);
+        }
+        Ok(())
+    } else {
+        Err("Main window not found".to_string())
+    }
+}
+
+#[tauri::command]
+pub fn native_exit_fullscreen_if_active(app: tauri::AppHandle) -> Result<bool, String> {
+    if let Some(win) = app.get_window("main").or_else(|| app.windows().into_values().next().map(|w| w.clone())) {
+        if let Ok(true) = win.is_fullscreen() {
+            win.set_fullscreen(false).map_err(|e| e.to_string())?;
+            let _ = win.emit("fullscreen-changed", false);
+            return Ok(true);
+        }
+        Ok(false)
+    } else {
+        Err("Main window not found".to_string())
     }
 }
 

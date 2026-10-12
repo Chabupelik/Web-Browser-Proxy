@@ -1,8 +1,13 @@
 <template>
-  <div class="flex flex-col h-screen w-screen bg-[#08080a] text-zinc-200 select-none font-sans overflow-hidden">
+  <div @mousemove="onGlobalMouseMove" class="flex flex-col h-screen w-screen bg-[#08080a] text-zinc-200 select-none font-sans overflow-hidden">
     
     <!-- HEADER WRAPPER ДЛЯ ИЗМЕРЕНИЯ ВЫСОТЫ -->
-    <div ref="headerWrapper" class="flex flex-col w-full shrink-0 z-30 shadow-md">
+    <div 
+      ref="headerWrapper" 
+      v-show="!isFullscreen || isHeaderRevealed"
+      @mouseleave="onHeaderMouseLeave"
+      class="flex flex-col w-full shrink-0 z-30 shadow-md"
+    >
       <!-- 1. ПАНЕЛЬ ВКЛАДОК -->
     <div @mousedown="startDragging" class="flex items-center bg-[#0d0d10] px-2 pt-1.5 border-b border-zinc-800/80 relative z-20 shrink-0 w-full h-11">
       <!-- Left scroll arrow -->
@@ -143,6 +148,21 @@
             +
           </button>
         </div>
+
+        <!-- Кнопка Полноэкранного режима (F11) -->
+        <button 
+          @click="toggleFullscreen" 
+          class="p-1.5 rounded-lg hover:bg-zinc-800 transition-colors flex items-center justify-center"
+          :class="isFullscreen ? 'text-emerald-400 bg-zinc-800/60' : 'text-zinc-400 hover:text-zinc-100'"
+          :title="isFullscreen ? 'Выйти из полноэкранного режима (F11)' : 'Полноэкранный режим (F11)'"
+        >
+          <svg v-if="!isFullscreen" class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
+          </svg>
+          <svg v-else class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 4v4H5m4 0L4 3m11 1v4h4m-4 0l5-5m-5 11v4h4m-4-4l5 5M9 15v4H5m4-4l-5 5" />
+          </svg>
+        </button>
 
         <!-- Кнопка Загрузок (Downloads) -->
         <button 
@@ -299,7 +319,60 @@ const zoomIn = () => setZoom(activeZoom.value + 0.1);
 const zoomOut = () => setZoom(activeZoom.value - 0.1);
 const zoomReset = () => setZoom(1.0);
 
+const isFullscreen = ref(false);
+const isHeaderRevealed = ref(false);
+const measuredHeaderHeight = ref(84);
+
+const setHeaderVisible = async (visible) => {
+  if (!isFullscreen.value) return;
+  isHeaderRevealed.value = visible;
+  const height = visible ? (measuredHeaderHeight.value || 84) : 0;
+  try {
+    await invoke('native_update_top_bar_height', { height });
+  } catch (err) {
+    console.error('Error updating top bar height:', err);
+  }
+};
+
+const toggleFullscreen = async () => {
+  try {
+    const nextState = await invoke('native_toggle_fullscreen');
+    isFullscreen.value = nextState;
+    if (nextState) {
+      isHeaderRevealed.value = false;
+      await invoke('native_update_top_bar_height', { height: 0 }).catch(() => {});
+    } else {
+      isHeaderRevealed.value = true;
+      await invoke('native_update_top_bar_height', { height: measuredHeaderHeight.value || 84 }).catch(() => {});
+    }
+  } catch (err) {
+    console.error('Error toggling fullscreen:', err);
+  }
+};
+
+const onHeaderMouseLeave = () => {
+  if (isFullscreen.value && !isDownloadsOpen.value) {
+    setHeaderVisible(false);
+  }
+};
+
+const onGlobalMouseMove = (e) => {
+  if (isFullscreen.value && !isHeaderRevealed.value && e.clientY <= 3) {
+    setHeaderVisible(true);
+  }
+};
+
 const handleGlobalKeydown = (e) => {
+  if (e.key === 'F11') {
+    e.preventDefault();
+    toggleFullscreen();
+    return;
+  }
+  if (e.key === 'Escape' && isFullscreen.value) {
+    e.preventDefault();
+    toggleFullscreen();
+    return;
+  }
   if (e.ctrlKey || e.metaKey) {
     if (e.key === '=' || e.key === '+') {
       e.preventDefault();
@@ -451,13 +524,41 @@ onMounted(async () => {
     for (let entry of entries) {
       if (entry.target === headerWrapper.value) {
         const height = entry.contentRect.height;
-        invoke('native_update_top_bar_height', { height }).catch(console.error);
+        if (height > 0) {
+          measuredHeaderHeight.value = height;
+        }
+        if (!isFullscreen.value || isHeaderRevealed.value) {
+          invoke('native_update_top_bar_height', { height }).catch(console.error);
+        } else {
+          invoke('native_update_top_bar_height', { height: 0 }).catch(console.error);
+        }
       }
     }
   });
   if (headerWrapper.value) {
     resizeObserver.observe(headerWrapper.value);
   }
+
+  invoke('native_is_fullscreen').then((fs) => {
+    isFullscreen.value = !!fs;
+  }).catch(() => {});
+
+  listen('fullscreen-changed', (event) => {
+    isFullscreen.value = !!event.payload;
+    if (isFullscreen.value) {
+      isHeaderRevealed.value = false;
+      invoke('native_update_top_bar_height', { height: 0 }).catch(() => {});
+    } else {
+      isHeaderRevealed.value = true;
+      invoke('native_update_top_bar_height', { height: measuredHeaderHeight.value || 84 }).catch(() => {});
+    }
+  });
+
+  listen('show-fullscreen-header', (event) => {
+    if (isFullscreen.value && !isHeaderRevealed.value) {
+      setHeaderVisible(true);
+    }
+  });
 
   // Подписка на события загрузки страниц из Rust
   listen('webview-loading', (event) => {
@@ -517,8 +618,6 @@ onMounted(async () => {
     const { url } = event.payload || {};
     if (!url) return;
     browserStore.addTab(url);
-    const newTabId = browserStore.activeTabId;
-    processNavigation(newTabId, url);
   });
 });
 

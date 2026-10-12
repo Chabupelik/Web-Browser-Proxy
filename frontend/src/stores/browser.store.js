@@ -14,7 +14,7 @@ export const useBrowserStore = defineStore('browser', () => {
   const activeTabId = ref(tabs.value[0].id);
 
   const addTab = (url = '') => {
-    const newTab = { id: generateTabId(), url, title: 'Новая вкладка', isLoading: false };
+    const newTab = { id: generateTabId(), url, title: 'Новая вкладка', isLoading: !!(url && url !== 'about:blank') };
     tabs.value.push(newTab);
     activeTabId.value = newTab.id;
   };

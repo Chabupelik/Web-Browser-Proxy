@@ -10,9 +10,11 @@ dist/
 build/
 target/
 src-tauri/target/
+releases/
 *.exe
 *.dll
 *.pdb
+*.msi
 .vite/
 .output/
 scramjet/

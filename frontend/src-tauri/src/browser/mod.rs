@@ -104,77 +104,6 @@ impl TabManager {
                   });
                 }
 
-                // Перехват window.open() — открываем в новой вкладке браузера вместо нового окна
-                const _origOpen = window.open;
-                window.open = function(url, target, features) {
-                    if (url && url !== 'about:blank' && url !== '' && target !== '_self') {
-                        const absUrl = new URL(url, window.location.href).href;
-                        try {
-                            if (window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke) {
-                                window.__TAURI__.core.invoke('native_open_new_tab', { url: absUrl }).catch(() => {});
-                            } else if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {
-                                window.__TAURI_INTERNALS__.invoke('native_open_new_tab', { url: absUrl }).catch(() => {});
-                            }
-                        } catch (_) {}
-                        return null;
-                    }
-                    return _origOpen.call(this, url, target, features);
-                };
-
-                // Перехват кликов по ссылкам с target=_blank
-                document.addEventListener('click', (e) => {
-                    // Исключаем ссылки с атрибутом download — они идут в нативный on_download WebView2
-                    const a = e.target.closest('a[target="_blank"]:not([download])');
-                    if (a && a.href && !a.href.startsWith('blob:') && !a.href.startsWith('javascript:')) {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        try {
-                            if (window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke) {
-                                window.__TAURI__.core.invoke('native_open_new_tab', { url: a.href }).catch(() => {});
-                            } else if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {
-                                window.__TAURI_INTERNALS__.invoke('native_open_new_tab', { url: a.href }).catch(() => {});
-                            }
-                        } catch (_) {}
-                    }
-                }, true);
-
-                window.addEventListener('contextmenu', (e) => {
-                    e.preventDefault();
-                    let href = '';
-                    let src = '';
-                    let target = e.target;
-                    while (target && target !== document) {
-                        if (target.tagName === 'A' && target.href) href = target.href;
-                        if (target.tagName === 'IMG' && target.src) src = target.src;
-                        target = target.parentNode;
-                    }
-                    let selection = window.getSelection().toString();
-                    if (window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke) {
-                        window.__TAURI__.core.invoke('native_context_menu', {
-                            window: '{}',
-                            href: href,
-                            src: src,
-                            selection: selection
-                        }).catch(() => {
-                            if (window.chrome && window.chrome.webview) {
-                                window.chrome.webview.postMessage(JSON.stringify({
-                                    cmd: 'native_context_menu',
-                                    href: href,
-                                    src: src,
-                                    selection: selection
-                                }));
-                            }
-                        });
-                    } else if (window.chrome && window.chrome.webview) {
-                        window.chrome.webview.postMessage(JSON.stringify({
-                            cmd: 'native_context_menu',
-                            href: href,
-                            src: src,
-                            selection: selection
-                        }));
-                    }
-                });
-
                 // Track title changes reliably across all origins
                 const notifyTitle = () => {
                     if (!document.title) return;
@@ -285,15 +214,81 @@ impl TabManager {
                     originalReplaceState.apply(this, arguments);
                     notifyUrl(window.location.href);
                 };
+
+                // Полноэкранный режим (F11 / Esc) в дочерних Webview
+                window.addEventListener('keydown', (e) => {
+                    if (e.key === 'F11') {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        try {
+                            if (window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke) {
+                                window.__TAURI__.core.invoke('native_toggle_fullscreen').catch(() => {});
+                            } else if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {
+                                window.__TAURI_INTERNALS__.invoke('native_toggle_fullscreen').catch(() => {});
+                            }
+                        } catch (_) {}
+                    } else if (e.key === 'Escape') {
+                        try {
+                            if (window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke) {
+                                window.__TAURI__.core.invoke('native_exit_fullscreen_if_active').catch(() => {});
+                            } else if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {
+                                window.__TAURI_INTERNALS__.invoke('native_exit_fullscreen_if_active').catch(() => {});
+                            }
+                        } catch (_) {}
+                    }
+                }, true);
+
+                // Определение подведения курсора к верхнему краю экрана в полноэкранном режиме
+                let _lastTopEdgeCheck = 0;
+                window.addEventListener('mousemove', (e) => {
+                    if (e.clientY <= 3) {
+                        const now = Date.now();
+                        if (now - _lastTopEdgeCheck > 200) {
+                            _lastTopEdgeCheck = now;
+                            try {
+                                if (window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke) {
+                                    window.__TAURI__.core.invoke('native_show_fullscreen_header', { show: true }).catch(() => {});
+                                } else if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {
+                                    window.__TAURI_INTERNALS__.invoke('native_show_fullscreen_header', { show: true }).catch(() => {});
+                                }
+                            } catch (_) {}
+                        }
+                    }
+                }, { passive: true });
+
+                // Поддержка HTML5 Fullscreen (YouTube, игры и т.д.)
+                document.addEventListener('fullscreenchange', () => {
+                    const isElemFs = !!document.fullscreenElement;
+                    try {
+                        if (window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke) {
+                            window.__TAURI__.core.invoke('native_set_fullscreen', { fullscreen: isElemFs }).catch(() => {});
+                        } else if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {
+                            window.__TAURI_INTERNALS__.invoke('native_set_fullscreen', { fullscreen: isElemFs }).catch(() => {});
+                        }
+                    } catch (_) {}
+                });
         "#;
         let init_script = base_script.replace("{{TAB_ID}}", &t_id_ipc);
 
         let t_id_load = t_id.clone();
+        let app_handle_new_win = app_handle.clone();
         let builder = WebviewBuilder::new(&label, parsed_url)
             .incognito(true)
             .initialization_script(&init_script)
+            .on_new_window(move |url, _features| {
+                println!("[NEW_WINDOW] Requested URL: {}", url);
+                let url_str = url.to_string();
+                if !url_str.is_empty() && url_str != "about:blank" {
+                    #[derive(serde::Serialize, Clone)]
+                    struct NewTabPayload {
+                        url: String,
+                    }
+                    use tauri::Emitter;
+                    let _ = app_handle_new_win.emit("open-new-tab", NewTabPayload { url: url_str });
+                }
+                tauri::webview::NewWindowResponse::Deny
+            })
             .on_navigation(move |url| {
-                // Разрешаем все навигации (window.open перехватывается через JS)
                 let _ = url;
                 true
             })
@@ -408,9 +403,7 @@ impl TabManager {
             tabs_map.insert(tab_id.to_string(), label.clone());
         }
 
-        // We DO NOT call switch_to_tab here anymore.
-        // The frontend will explicitly call native_switch_tab when it's ready to show (e.g., after loading).
-        // self.switch_to_tab(window, tab_id)?;
+        self.switch_to_tab(window, tab_id)?;
 
         Ok(())
     }
